@@ -1,0 +1,10 @@
+[package]
+name = "rns"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The Borrowed Sword: a tiny terminal adventure"
+
+[dependencies]
+crossterm = "0.29"
+rodio = { version = "0.21", default-features = false, features = ["playback", "wav"] }
