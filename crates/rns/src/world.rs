@@ -64,16 +64,21 @@ pub enum Room {
     Clearing,
     Woods,
     Secret,
+    Desert,
+    Snow,
 }
 
 impl Room {
+    pub const COUNT: usize = 7;
     #[cfg(test)]
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; Self::COUNT] = [
         Self::Glade,
         Self::Cave,
         Self::Clearing,
         Self::Woods,
         Self::Secret,
+        Self::Desert,
+        Self::Snow,
     ];
 
     pub fn index(self) -> usize {
@@ -87,6 +92,8 @@ impl Room {
             Self::Clearing => "Unnecessary Clearing",
             Self::Woods => "Borrowed Woods",
             Self::Secret => "Secret Room",
+            Self::Desert => "Sunburnt Dunes",
+            Self::Snow => "Frostbound Hollow",
         }
     }
 
@@ -95,9 +102,11 @@ impl Room {
         match self {
             Self::Glade => &[North, East],
             Self::Cave => &[South],
-            Self::Clearing => &[West, East],
+            Self::Clearing => &[North, West, South, East],
             Self::Woods => &[North, West, South, East],
             Self::Secret => &[East],
+            Self::Desert => &[North],
+            Self::Snow => &[South],
         }
     }
 
@@ -112,8 +121,8 @@ impl Room {
                 "South to your footprints. West to what's mislaid.",
             ],
             Self::Clearing => [
-                "These monsters were hired for their enthusiasm.",
-                "West: glade. East: woods. Space: performance review.",
+                "North: snow and steel. South: dunes and armor.",
+                "West: glade. East: woods. Choose your expedition.",
             ],
             Self::Woods => [
                 "The trees look suspiciously familiar.",
@@ -123,6 +132,14 @@ impl Room {
                 "The certificate has two extremely budget guards.",
                 "Defeat them and claim it. East leads back to the woods.",
             ],
+            Self::Desert => [
+                "An old suit of armor rests beyond the dunes.",
+                "Find it in the south. North returns to the clearing.",
+            ],
+            Self::Snow => [
+                "A frost-forged sword waits in the northern hollow.",
+                "Bring it home. South returns to the clearing.",
+            ],
         }
     }
 }
@@ -131,6 +148,8 @@ pub const SWORD: Pos = Pos::new(15, 5);
 pub const HERMIT: Pos = Pos::new(15, 3);
 pub const CHEST: Pos = Pos::new(15, 4);
 pub const START: Pos = Pos::new(15, 10);
+pub const ARMOR: Pos = Pos::new(15, 12);
+pub const FROST_SWORD: Pos = Pos::new(15, 3);
 
 // Inclusive rectangles keep the small maps legible without a map-file parser.
 struct Obstacle {
@@ -185,12 +204,30 @@ fn obstacles(room: Room) -> &'static [Obstacle] {
         Obstacle::new(5, 10, 6, 12, '#'),
         Obstacle::new(23, 10, 24, 12, '#'),
     ];
+    const DESERT: &[Obstacle] = &[
+        Obstacle::new(4, 3, 7, 4, 'T'),
+        Obstacle::new(21, 3, 24, 5, 'T'),
+        Obstacle::new(10, 6, 12, 7, '#'),
+        Obstacle::new(18, 9, 21, 10, '#'),
+        Obstacle::new(4, 10, 7, 12, '~'),
+        Obstacle::new(23, 12, 25, 13, 'T'),
+    ];
+    const SNOW: &[Obstacle] = &[
+        Obstacle::new(4, 3, 7, 5, 'T'),
+        Obstacle::new(22, 3, 25, 5, 'T'),
+        Obstacle::new(9, 8, 11, 10, '#'),
+        Obstacle::new(19, 8, 21, 10, '#'),
+        Obstacle::new(4, 11, 6, 12, '~'),
+        Obstacle::new(23, 11, 25, 12, '~'),
+    ];
     match room {
         Room::Glade => GLADE,
         Room::Cave => CAVE,
         Room::Clearing => CLEARING,
         Room::Woods => WOODS,
         Room::Secret => SECRET,
+        Room::Desert => DESERT,
+        Room::Snow => SNOW,
     }
 }
 

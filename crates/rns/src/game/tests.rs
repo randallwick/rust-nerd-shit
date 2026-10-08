@@ -103,6 +103,10 @@ fn an_enemy_walking_into_an_active_slash_dies() {
     assert!(game.actors()[0].alive);
     game.tick();
     assert!(!game.actors()[0].alive);
+    assert_eq!(game.impact, Some(Pos::new(14, 8)));
+    assert_eq!(game.impact_ms, 200);
+    ticks(&mut game, 4);
+    assert_eq!(game.impact_ms, 0);
 }
 
 #[test]
@@ -341,6 +345,8 @@ fn every_map_item_exit_and_enemy_is_reachable() {
             Room::Glade => START,
             Room::Cave => SWORD,
             Room::Secret => CHEST,
+            Room::Desert => ARMOR,
+            Room::Snow => FROST_SWORD,
             _ => start,
         };
         assert!(reached.contains(&item));
@@ -441,4 +447,440 @@ fn damage_feedback_respects_invulnerability_and_death_is_one_shot() {
     ticks(&mut game, 10);
     assert_eq!(game.drain_sounds().collect::<Vec<_>>(), [SoundCue::Death]);
     assert_eq!(game.mode, Mode::Dead);
+}
+
+#[test]
+fn peaceful_wildlife_cannot_hurt_be_killed_or_block_a_path() {
+    for kind in [
+        CritterKind::Rabbit,
+        CritterKind::Duck,
+        CritterKind::Tortoise,
+    ] {
+        let mut game = Game::new();
+        let pos = Pos::new(16, 10);
+        game.critters[Room::Glade.index()] = vec![Critter::new(pos.x, pos.y, kind)];
+        game.sword = true;
+        game.facing = Direction::East;
+        game.act(Action::Attack);
+        assert_eq!(game.wildlife().len(), 1);
+        assert_eq!(game.wildlife()[0].pos, pos);
+        assert_eq!(game.drain_sounds().collect::<Vec<_>>(), [SoundCue::Sword]);
+        ticks(&mut game, 3);
+        game.act(Action::Move(Direction::East));
+        assert_eq!(game.player, pos);
+        assert_eq!(game.hearts, 3);
+        assert_eq!(game.mode, Mode::Playing);
+    }
+}
+
+#[test]
+fn wildlife_wanders_repeatably_in_valid_habitats_without_overlapping() {
+    for room in Room::ALL {
+        let mut first = Game::new();
+        let mut second = Game::new();
+        first.room = room;
+        second.room = room;
+        let origins: Vec<_> = first.wildlife().iter().map(|c| c.pos).collect();
+        let mut moved = vec![false; origins.len()];
+        for _ in 0..200 {
+            first.move_critters();
+            second.move_critters();
+            assert_eq!(first.wildlife(), second.wildlife());
+            for (i, critter) in first.wildlife().iter().enumerate() {
+                assert!(critter.habitat(room, critter.pos));
+                assert_ne!(critter.pos, first.player);
+                assert!(
+                    !first
+                        .actors()
+                        .iter()
+                        .any(|e| e.alive && e.pos == critter.pos)
+                );
+                assert_eq!(
+                    first
+                        .wildlife()
+                        .iter()
+                        .filter(|c| c.pos == critter.pos)
+                        .count(),
+                    1
+                );
+                moved[i] |= critter.pos != origins[i];
+            }
+        }
+        assert!(
+            moved.iter().all(|moved| *moved),
+            "{room:?}: every animal should wander"
+        );
+    }
+}
+
+#[test]
+fn wildlife_avoids_the_player_and_enemies_when_choosing_a_step() {
+    let mut game = Game::new();
+    let pos = game.wildlife()[0].pos;
+    game.player = pos.step(Direction::East);
+    game.move_critters();
+    assert_eq!(game.wildlife()[0].pos, pos);
+    game.player = START;
+    game.critters[0][0].phase = 0;
+    let occupied = pos.step(Direction::East);
+    game.enemies[0].push(Enemy::new(occupied.x, occupied.y, Kind::Slime));
+    game.move_critters();
+    assert_eq!(game.wildlife()[0].pos, pos);
+}
+
+#[test]
+fn greet_uses_nearest_animal_within_two_tiles_and_has_no_combat_effect() {
+    let mut game = Game::new();
+    game.act(Action::Greet);
+    assert!(game.message()[0].contains("No animal nearby"));
+    let cases = [
+        (CritterKind::Rabbit, "rabbit"),
+        (CritterKind::Duck, "duck"),
+        (CritterKind::Tortoise, "tortoise"),
+    ];
+    for (kind, expected) in cases {
+        game.critters[0] = vec![Critter::new(17, 10, kind)];
+        game.act(Action::Greet);
+        assert!(game.message()[0].contains(expected));
+        assert_eq!(game.hearts, 3);
+        assert!(!game.sword);
+        assert!(game.drain_sounds().next().is_none());
+        game.critters[0][0].pos = Pos::new(18, 10);
+        game.act(Action::Greet);
+        assert!(game.message()[0].contains("No animal nearby"));
+    }
+    game.critters[0] = vec![
+        Critter::new(17, 10, CritterKind::Rabbit),
+        Critter::new(16, 10, CritterKind::Tortoise),
+    ];
+    game.act(Action::Greet);
+    assert!(game.message()[0].contains("tortoise"));
+}
+
+#[test]
+fn wildlife_and_visual_time_freeze_outside_play_and_restart_resets_them() {
+    let mut game = Game::new();
+    ticks(&mut game, 18);
+    assert_ne!(game.wildlife(), Game::new().wildlife());
+    for mode in [Mode::Paused, Mode::Dead, Mode::Won] {
+        game.mode = mode;
+        let wildlife = game.wildlife().to_vec();
+        let time = game.animation_ms;
+        let message = game.message();
+        ticks(&mut game, 100);
+        game.act(Action::Greet);
+        assert_eq!(game.wildlife(), wildlife);
+        assert_eq!(game.animation_ms, time);
+        assert_eq!(game.message(), message);
+    }
+    game.act(Action::Restart);
+    assert_eq!(game.wildlife(), Game::new().wildlife());
+    assert_eq!(game.animation_ms, 0);
+}
+
+#[test]
+fn inactive_rooms_keep_wildlife_state_and_screen_crossings_do_not_reset_it() {
+    let mut game = Game::new();
+    game.move_critters();
+    let glade = game.wildlife().to_vec();
+    exit(&mut game, Direction::North);
+    ticks(&mut game, 100);
+    assert_eq!(game.critters[Room::Glade.index()], glade);
+    exit(&mut game, Direction::South);
+    assert_eq!(game.wildlife(), glade);
+    game.room = Room::Woods;
+    game.move_critters();
+    let woods = game.wildlife().to_vec();
+    exit(&mut game, Direction::North);
+    assert_eq!(game.room, Room::Woods);
+    assert_eq!(game.wildlife(), woods);
+}
+
+#[test]
+fn biome_branches_return_to_the_clearing_and_keep_the_woods_puzzle() {
+    let mut game = Game::new();
+    exit(&mut game, Direction::East);
+    assert_eq!(game.room, Room::Clearing);
+    for (out, room, back) in [
+        (Direction::North, Room::Snow, Direction::South),
+        (Direction::South, Room::Desert, Direction::North),
+    ] {
+        exit(&mut game, out);
+        assert_eq!(game.room, room);
+        assert_eq!(game.player, back.entrance());
+        exit(&mut game, back);
+        assert_eq!(game.room, Room::Clearing);
+        assert_eq!(game.player, out.entrance());
+    }
+    exit(&mut game, Direction::East);
+    for direction in ROUTE {
+        exit(&mut game, direction);
+    }
+    assert_eq!(game.room, Room::Secret);
+}
+
+#[test]
+fn equipment_collects_once_survives_travel_and_resets_on_restart() {
+    let mut game = Game::new();
+    game.room = Room::Desert;
+    game.player = ARMOR;
+    game.tick();
+    assert!(game.armor);
+    assert_eq!(game.drain_sounds().collect::<Vec<_>>(), [SoundCue::Pickup]);
+    game.tick();
+    assert!(game.drain_sounds().next().is_none());
+    exit(&mut game, Direction::North);
+    exit(&mut game, Direction::North);
+    game.player = FROST_SWORD;
+    game.tick();
+    assert!(game.frost_sword && game.sword && game.armor);
+    assert_eq!(game.sword_reach(), 2);
+    assert_eq!(game.drain_sounds().collect::<Vec<_>>(), [SoundCue::Pickup]);
+    game.tick();
+    assert!(game.drain_sounds().next().is_none());
+    exit(&mut game, Direction::South);
+    exit(&mut game, Direction::West);
+    exit(&mut game, Direction::North);
+    game.player = SWORD;
+    game.tick();
+    assert!(
+        game.frost_sword,
+        "basic sword pickup must never downgrade frost sword"
+    );
+    assert!(game.drain_sounds().next().is_none());
+    game.mode = Mode::Dead;
+    game.act(Action::Restart);
+    assert!(!game.armor && !game.frost_sword && !game.sword);
+    assert!(!game.half_heart);
+}
+
+#[test]
+fn armor_halves_damage_preserves_immunity_and_allows_six_contacts() {
+    let mut game = Game::new();
+    game.armor = true;
+    game.enemies[0] = vec![Enemy::new(15, 10, Kind::Slime)];
+    for hit in 1..=6 {
+        game.player = START;
+        game.immune_ms = 0;
+        game.contact();
+        assert_eq!(game.hearts * 2 + u8::from(game.half_heart), 6 - hit);
+        assert_eq!(game.mode, if hit == 6 { Mode::Dead } else { Mode::Playing });
+        game.player = START;
+        game.contact();
+        assert_eq!(game.hearts * 2 + u8::from(game.half_heart), 6 - hit);
+    }
+}
+
+#[test]
+fn tougher_enemies_take_two_swings_not_two_ticks_and_frost_hits_once() {
+    for frost in [false, true] {
+        let mut game = Game::new();
+        game.sword = true;
+        game.frost_sword = frost;
+        game.facing = Direction::East;
+        game.enemies[0] = vec![Enemy::tough(16, 10, Kind::Beetle)];
+        game.act(Action::Attack);
+        assert_eq!(game.actors()[0].health, if frost { 0 } else { 1 });
+        assert_eq!(game.actors()[0].alive, !frost);
+        ticks(&mut game, 3);
+        assert_eq!(game.actors()[0].health, if frost { 0 } else { 1 });
+        ticks(&mut game, 3);
+        game.act(Action::Attack);
+        assert!(!game.actors()[0].alive);
+    }
+}
+
+#[test]
+fn frost_reaches_two_tiles_in_each_direction_without_side_or_rear_hits() {
+    for direction in [
+        Direction::North,
+        Direction::West,
+        Direction::South,
+        Direction::East,
+    ] {
+        let mut game = Game::new();
+        game.sword = true;
+        game.frost_sword = true;
+        game.player = Pos::new(15, 8);
+        game.facing = direction;
+        let one = game.player.step(direction);
+        let two = one.step(direction);
+        let three = two.step(direction);
+        let rear = game.player.step(direction.opposite());
+        let side = game.player.step(
+            if matches!(direction, Direction::North | Direction::South) {
+                Direction::East
+            } else {
+                Direction::North
+            },
+        );
+        game.enemies[0] = [one, two, three, rear, side]
+            .into_iter()
+            .map(|p| Enemy::tough(p.x, p.y, Kind::Slime))
+            .collect();
+        game.act(Action::Attack);
+        assert!(!game.actors()[0].alive && !game.actors()[1].alive);
+        assert!(game.actors()[2..].iter().all(|e| e.alive));
+    }
+}
+
+#[test]
+fn upgraded_blade_stops_at_water_and_walls_and_leaves_wildlife_safe() {
+    let mut game = Game::new();
+    game.room = Room::Clearing;
+    game.player = Pos::new(20, 8);
+    game.facing = Direction::South;
+    game.sword = true;
+    game.frost_sword = true;
+    game.enemies[2] = vec![
+        Enemy::tough(20, 9, Kind::Slime),
+        Enemy::tough(20, 10, Kind::Slime),
+    ];
+    game.act(Action::Attack);
+    assert!(!game.actors()[0].alive);
+    assert!(game.actors()[1].alive);
+    assert_eq!(game.attack_tiles().collect::<Vec<_>>(), [Pos::new(20, 9)]);
+    let wildlife = game.wildlife().to_vec();
+    game.player = Pos::new(6, 2);
+    game.facing = Direction::South;
+    ticks(&mut game, 6);
+    game.act(Action::Attack);
+    assert!(game.attack_tiles().next().is_none());
+    assert_eq!(game.wildlife(), wildlife);
+}
+
+#[test]
+fn containers_drop_only_on_death_and_never_duplicate() {
+    let mut game = Game::new();
+    game.sword = true;
+    game.facing = Direction::East;
+    let pos = START.step(Direction::East);
+    game.enemies[0] = vec![Enemy::tough(pos.x, pos.y, Kind::Slime).with_container()];
+    game.act(Action::Attack);
+    assert!(game.actors()[0].alive);
+    assert!(game.containers().is_empty());
+    ticks(&mut game, 6);
+    game.act(Action::Attack);
+    assert!(!game.actors()[0].alive);
+    assert_eq!(game.containers(), [pos]);
+    ticks(&mut game, 6);
+    game.act(Action::Attack);
+    assert_eq!(game.containers(), [pos]);
+    game.enemies[0].push(Enemy::new(pos.x, pos.y, Kind::Beetle));
+    ticks(&mut game, 6);
+    game.act(Action::Attack);
+    assert_eq!(
+        game.containers(),
+        [pos],
+        "ordinary enemies must not also drop containers"
+    );
+}
+
+#[test]
+fn walking_onto_a_container_increases_capacity_refills_and_collects_once() {
+    let mut game = Game::new();
+    game.hearts = 1;
+    game.half_heart = true;
+    let pos = START.step(Direction::East);
+    game.heart_containers[0].push(pos);
+    game.act(Action::Move(Direction::East));
+    assert_eq!(game.max_hearts, 4);
+    assert_eq!(game.hearts, 4);
+    assert!(!game.half_heart);
+    assert!(game.containers().is_empty());
+    assert_eq!(game.drain_sounds().collect::<Vec<_>>(), [SoundCue::Pickup]);
+    game.tick();
+    assert_eq!(game.max_hearts, 4);
+    assert!(game.drain_sounds().next().is_none());
+}
+
+#[test]
+fn dropped_containers_and_capacity_persist_across_rooms_until_restart() {
+    let mut game = Game::new();
+    game.room = Room::Clearing;
+    game.sword = true;
+    game.player = Pos::new(9, 8);
+    game.facing = Direction::East;
+    game.act(Action::Attack);
+    let drop = game.containers()[0];
+    exit(&mut game, Direction::West);
+    ticks(&mut game, 6);
+    exit(&mut game, Direction::East);
+    assert_eq!(game.containers(), [drop]);
+    assert!(!game.actors()[0].alive);
+    game.player = drop;
+    game.collect();
+    exit(&mut game, Direction::North);
+    assert_eq!(game.max_hearts, 4);
+    game.mode = Mode::Dead;
+    game.act(Action::Restart);
+    assert_eq!(game.max_hearts, 3);
+    assert_eq!(game.hearts, 3);
+    assert!(game.heart_containers.iter().all(Vec::is_empty));
+    assert!(game.enemies.iter().flatten().all(|e| e.alive));
+}
+
+#[test]
+fn maximum_health_is_bounded_at_six_even_with_extra_containers() {
+    let mut game = Game::new();
+    for expected in [4, 5, 6, 6] {
+        game.heart_containers[0].push(START);
+        game.collect();
+        assert_eq!(game.max_hearts, expected);
+        assert_eq!(game.hearts, expected);
+        assert!(game.containers().is_empty());
+    }
+    let droppers = Game::new()
+        .enemies
+        .into_iter()
+        .flatten()
+        .filter(|e| e.drops_container)
+        .count();
+    assert_eq!(
+        droppers, 3,
+        "three designated enemies allow three capacity upgrades"
+    );
+}
+
+#[test]
+fn regeneration_restores_a_half_heart_every_twenty_seconds_and_stops_at_capacity() {
+    let mut game = Game::new();
+    game.hearts = 2;
+    ticks(&mut game, usize::from(REGEN_MS / TICK_MS) - 1);
+    assert_eq!(game.health_halves(), 4);
+    game.tick();
+    assert_eq!(game.health_halves(), 5);
+    ticks(&mut game, usize::from(REGEN_MS / TICK_MS));
+    assert_eq!(game.health_halves(), 6);
+    ticks(&mut game, 1000);
+    assert_eq!(game.health_halves(), 6);
+    assert_eq!(game.regen_ms, 0);
+    assert!(
+        game.drain_sounds().next().is_none(),
+        "passive regeneration should stay quiet"
+    );
+}
+
+#[test]
+fn damage_restarts_regeneration_and_nonplaying_modes_freeze_it() {
+    let mut game = Game::new();
+    game.hearts = 2;
+    ticks(&mut game, 399);
+    game.enemies[0].push(Enemy::new(START.x, START.y, Kind::Slime));
+    game.contact();
+    assert_eq!(game.health_halves(), 2);
+    assert_eq!(game.regen_ms, 0);
+    game.enemies[0].clear();
+    ticks(&mut game, 399);
+    assert_eq!(game.health_halves(), 2);
+    for mode in [Mode::Paused, Mode::Dead, Mode::Won] {
+        game.mode = mode;
+        let timer = game.regen_ms;
+        ticks(&mut game, 1000);
+        assert_eq!(game.regen_ms, timer);
+        assert_eq!(game.health_halves(), 2);
+    }
+    game.mode = Mode::Playing;
+    game.tick();
+    assert_eq!(game.health_halves(), 3);
 }

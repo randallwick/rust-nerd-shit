@@ -17,6 +17,9 @@ fn help_is_plain_stdout_and_succeeds_without_a_terminal() {
     assert!(text.contains("64 columns"));
     assert!(text.contains("--mute"));
     assert!(text.contains("Mute / unmute"));
+    assert!(text.contains("--terminal"));
+    assert!(text.contains("E                  Greet"));
+    assert!(text.contains("native window"));
     assert!(!text.contains('\u{1b}'));
 }
 
@@ -33,7 +36,14 @@ fn version_is_plain_stdout() {
 
 #[test]
 fn invalid_arguments_report_usage_error_on_stderr() {
-    for args in [&["quest"][..], &["--unknown"], &["--help", "--version"]] {
+    for args in [
+        &["quest"][..],
+        &["--unknown"],
+        &["--help", "--version"],
+        &["--mute", "--mute"],
+        &["--terminal", "--terminal"],
+        &["--help", "--terminal"],
+    ] {
         let output = run(args);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
@@ -45,7 +55,7 @@ fn invalid_arguments_report_usage_error_on_stderr() {
 
 #[test]
 fn redirected_gameplay_fails_without_escape_sequences() {
-    let output = run(&[]);
+    let output = run(&["--terminal"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let text = String::from_utf8(output.stderr).unwrap();
@@ -55,10 +65,12 @@ fn redirected_gameplay_fails_without_escape_sequences() {
 
 #[test]
 fn mute_is_accepted_but_still_requires_an_interactive_terminal() {
-    let output = run(&["--mute"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    let error = String::from_utf8(output.stderr).unwrap();
-    assert!(error.contains("interactive stdin and stdout"));
-    assert!(!error.contains("audio"));
+    for args in [["--terminal", "--mute"], ["--mute", "--terminal"]] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("interactive stdin and stdout"));
+        assert!(!error.contains("audio"));
+    }
 }

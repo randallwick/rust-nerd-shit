@@ -10,7 +10,7 @@ use crossterm::{execute, queue};
 
 use crate::audio::Audio;
 use crate::game::{Action, Game, Kind, Mode, TICK_MS};
-use crate::world::{self, CHEST, Direction, HEIGHT, Pos, Room, SWORD, WIDTH};
+use crate::world::{self, ARMOR, CHEST, Direction, FROST_SWORD, HEIGHT, Pos, Room, SWORD, WIDTH};
 
 const MIN_COLS: u16 = 64;
 const MIN_ROWS: u16 = 22;
@@ -88,6 +88,7 @@ fn input(key: KeyEvent) -> Input {
         KeyCode::Down | KeyCode::Char('s' | 'S') => Input::Act(Action::Move(Direction::South)),
         KeyCode::Right | KeyCode::Char('d' | 'D') => Input::Act(Action::Move(Direction::East)),
         KeyCode::Char(' ') => Input::Act(Action::Attack),
+        KeyCode::Char('e' | 'E') if key.kind == KeyEventKind::Press => Input::Act(Action::Greet),
         KeyCode::Char('m' | 'M') if key.kind == KeyEventKind::Press => Input::Mute,
         KeyCode::Char('p' | 'P') if key.kind == KeyEventKind::Press => Input::Act(Action::Pause),
         KeyCode::Char('r' | 'R') if key.kind == KeyEventKind::Press => Input::Act(Action::Restart),
@@ -205,15 +206,30 @@ fn render(out: &mut impl Write, game: &Game, size: (u16, u16), audio: &str) -> i
         &format!("THE BORROWED SWORD | {} | Sound: {audio}", game.room.name()),
         size.0,
     )?;
-    let hearts = (0..3)
-        .map(|i| if i < game.hearts { "<3 " } else { "-- " })
+    let hearts = (0..game.max_hearts)
+        .map(|i| {
+            if i < game.hearts {
+                "<3 "
+            } else if i == game.hearts && game.half_heart {
+                "1/2"
+            } else {
+                "-- "
+            }
+        })
         .collect::<String>();
     line(
         out,
         1,
         &format!(
-            "Hearts: {hearts}  Sword: {}  Facing: {:?}",
-            if game.sword { "equipped" } else { "none" },
+            "HP: {hearts} Sword: {} Armor: {} {:?}",
+            if game.frost_sword {
+                "frost"
+            } else if game.sword {
+                "basic"
+            } else {
+                "none"
+            },
+            if game.armor { "on" } else { "none" },
             game.facing
         ),
         size.0,
@@ -242,6 +258,26 @@ fn render(out: &mut impl Write, game: &Game, size: (u16, u16), audio: &str) -> i
                     Color::Yellow
                 };
             }
+            if game.room == Room::Desert && !game.armor && pos == ARMOR {
+                glyph = 'A';
+                color = Color::White;
+            }
+            if game.room == Room::Snow && !game.frost_sword && pos == FROST_SWORD {
+                glyph = '!';
+                color = Color::Cyan;
+            }
+            if game.containers().contains(&pos) {
+                glyph = 'C';
+                color = Color::Yellow;
+            }
+            if let Some(critter) = game.wildlife().iter().find(|c| c.pos == pos) {
+                glyph = match critter.kind {
+                    crate::game::CritterKind::Rabbit => 'r',
+                    crate::game::CritterKind::Duck => 'd',
+                    crate::game::CritterKind::Tortoise => 't',
+                };
+                color = Color::Yellow;
+            }
             if let Some(enemy) = game.actors().iter().find(|e| e.alive && e.pos == pos) {
                 glyph = match enemy.kind {
                     Kind::Slime => 's',
@@ -249,8 +285,8 @@ fn render(out: &mut impl Write, game: &Game, size: (u16, u16), audio: &str) -> i
                 };
                 color = Color::Red;
             }
-            if game.slash_ms > 0 && pos == game.player.step(game.facing) {
-                glyph = '/';
+            if game.slash_ms > 0 && game.attack_tiles().any(|target| target == pos) {
+                glyph = if game.frost_sword { '=' } else { '/' };
                 color = Color::White;
             }
             if pos == game.player {
@@ -268,7 +304,7 @@ fn render(out: &mut impl Write, game: &Game, size: (u16, u16), audio: &str) -> i
     line(
         out,
         18,
-        "WASD/arrows: move  Space: sword  P: pause  M: mute  Q: quit",
+        "WASD/arrows move  Space sword  E greet  P pause  M mute  Q quit",
         size.0,
     )?;
     let message = game.message();
@@ -277,7 +313,7 @@ fn render(out: &mut impl Write, game: &Game, size: (u16, u16), audio: &str) -> i
     line(
         out,
         21,
-        "@ you  s slime  b beetle  / sword  H hermit  $ certificate",
+        "@ you  s/b foes  r rabbit  d duck  t tortoise  / sword  $ prize",
         size.0,
     )?;
     let overlay = match game.mode {
@@ -338,6 +374,9 @@ mod tests {
     #[test]
     fn rendering_handles_small_terminal_and_game_overlays() {
         let mut game = Game::new();
+        game.max_hearts = 6;
+        game.hearts = 2;
+        game.half_heart = true;
         let mut output = Vec::new();
         render(&mut output, &game, (40, 10), "muted").unwrap();
         assert!(
@@ -351,6 +390,7 @@ mod tests {
             render(&mut output, &game, (64, 22), "muted").unwrap();
             let output = String::from_utf8(output).unwrap();
             assert!(output.contains("THE BORROWED SWORD"));
+            assert!(output.contains("HP: <3 <3 1/2-- -- -- "));
             if mode == Mode::Won {
                 assert!(output.contains("CERTIFICATE OF UNREASONABLE CONFIDENCE"));
             }
